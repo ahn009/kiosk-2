@@ -1,0 +1,167 @@
+// Access Control System — Kiosk ID verification & access control
+// SQLite (Prisma). Face embeddings stored as JSON string (512 floats).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+  employees Employee[]
+}
+
+model Employee {
+  id             String   @id @default(cuid())
+  employeeCode   String   @unique
+  fullName       String
+  departmentId   String?
+  department     Department? @relation(fields: [departmentId], references: [id])
+  designation    String?
+  accessLevel    Int      @default(1) // 1..5
+  photoUrl       String?
+  faceEmbedding  String?  // JSON 512-float vector; null until enrolled
+  faceEnrolledAt DateTime?
+  faceConsentAt  DateTime? // null = face rec disabled (card+PIN fallback)
+  cardTokenHash  String?  @unique // SHA-256 of current QR token
+  cardStatus     String   @default("active") // active|revoked|expired|lost
+  cardExpiresAt  DateTime?
+  pinHash        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime? // GDPR soft-delete timestamp; null = active
+
+  scans       ScanEvent[]
+  enrollments Enrollment[]
+
+  @@index([departmentId])
+  @@index([cardStatus])
+}
+
+// Immutable audit trail — append only by app convention
+model ScanEvent {
+  id               Int      @id @default(autoincrement())
+  kioskId          String
+  employeeId       String?
+  employee         Employee? @relation(fields: [employeeId], references: [id])
+  tokenHash        String?
+  faceMatchScore   Float?
+  faceMatchStatus  String   // match|mismatch|no_face|liveness_fail
+  spoofFlags       String?  // JSON
+  decision         String   // granted|denied|challenge_failed|error|lockdown|supervisor_override
+  snapshotPath     String?
+  latencyMs        Int?
+  offline          Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@index([kioskId])
+  @@index([employeeId])
+  @@index([decision])
+  @@index([createdAt])
+}
+
+model Revocation {
+  tokenHash String   @id
+  reason    String?
+  revokedAt DateTime @default(now())
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         String   @default("viewer") // superadmin|security_officer|hr_admin|viewer
+  createdAt    DateTime @default(now())
+
+  enrollments Enrollment[]
+  actions     AdminAction[]
+  sessions    AdminSession[]
+}
+
+// Durable server-side sessions. Only the SHA-256 hash of the token is stored;
+// the raw token is shown to the client once at login/refresh.
+model AdminSession {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([adminId])
+  @@index([expiresAt])
+}
+
+model MobileSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  employeeId String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId])
+  @@index([expiresAt])
+}
+
+model Enrollment {
+  id                  String   @id @default(cuid())
+  employeeId         String
+  employee           Employee @relation(fields: [employeeId], references: [id])
+  enrolledBy         String?
+  enrolledByAdmin    AdminUser? @relation(fields: [enrolledBy], references: [id])
+  imageQualityScore   Float?
+  consentAcknowledged Boolean @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([employeeId])
+}
+
+model Kiosk {
+  id            String   @id @default(cuid())
+  kioskId       String   @unique
+  name          String
+  location      String?
+  status        String   @default("online") // online|offline|maintenance|lockdown
+  thresholdGranted  Float @default(0.85)
+  thresholdChallenge Float @default(0.6)
+  challengeMode String   @default("liveness") // liveness|challenge|both
+  crlVersion    Int      @default(1)
+  lastSyncAt    DateTime?
+  configVersion Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model AdminAction {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      AdminUser? @relation(fields: [actorId], references: [id])
+  target     String   // e.g. "employee:<id>"
+  action     String   // e.g. "employee.create"
+  beforeData String?  // JSON
+  afterData  String?  // JSON
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+}
+
+// System-wide settings / lockdown state (singleton-ish)
+model SystemState {
+  id            String   @id @default("singleton")
+  lockdownActive Boolean @default(false)
+  lockdownReason String?
+  lockdownStartedAt DateTime?
+  crlVersion    Int      @default(1)
+  orgCode       String   @default("ACME")
+  orgName       String   @default("Acme Corporation")
+  updatedAt     DateTime @updatedAt
+}

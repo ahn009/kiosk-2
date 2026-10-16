@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+.next/
+dist/
+coverage/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data
+db/*.db
+db/*.db-*
+db/webhook-state.json
+
+# Local tooling metadata
+.agents/
+.aws/
+.codex/
+
+# Logs and editor/OS files
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.swp
